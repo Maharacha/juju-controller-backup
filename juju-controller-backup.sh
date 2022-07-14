@@ -12,11 +12,24 @@ KEEPCOUNT=10
 DESTDIR=.
 NOW=$(date +%Y%m%d-%H%M%S)
 SLACKWEBHOOK=
+# Config variables for sending backup to a remote location using sftp
+REMOTEHOST=
+REMOTEPORT=
+REMOTEUSER=
+RSAPATH=
+REMOTEDIR=
 
 send_slack() {
     if [ -n "$SLACKWEBHOOK" ]; then
         ./slack-notifier.py -w "$SLACKWEBHOOK" -m "$1"
     fi
+}
+
+run_sftp_command() {
+    sftp -P $REMOTEPORT -i $RSAPATH $REMOTEUSER@$REMOTEHOST <<EOF
+    $1
+    exit
+EOF
 }
 
 # Logging function, courtesy of cdarke:
@@ -58,10 +71,11 @@ if ! [ $? -eq 0 ]; then
 fi
 
 mkdir -p "$DESTDIR"
+FILEPATH="$DESTDIR"/juju-backup_"$JUJUCONTROLLER"_"$NOW".tar.gz
 
 "$JUJU" create-backup --model="$JUJUCONTROLLER":admin/controller \
-    --filename="$DESTDIR"/juju-backup_"$JUJUCONTROLLER"_"$NOW".tar.gz \
-    2>&1 | tee "$DESTDIR"/juju-backup_"$JUJUCONTROLLER"_"$NOW".tar.gz.out
+    --filename=$FILEPATH \
+    2>&1 | tee $FILEPATH.out
 BACKUPRET=$?
 
 # Get backup result
@@ -78,12 +92,32 @@ if [ $BACKUPRET -ne 0 ] ; then
     exit 1
 fi
 
-echo Backup was successfully created in "$DESTDIR"/"$JUJUCONTROLLER"
+echo Backup was successfully created in $DESTDIR
+
+if [ -n "$REMOTEHOST" ]; then
+    # Create remote directory for backup
+    run_sftp_command "mkdir $REMOTEDIR/$DESTDIR"
+
+    # Send backup to remote server
+    run_sftp_command "put $FILEPATH* $REMOTEDIR/$DESTDIR"
+    BACKUPRET=$?
+    if [ $BACKUPRET -ne 0 ] ; then
+        msg="Backup of $JUJUCONTROLLER to remote FAILED!"
+        echo $msg
+        send_slack "$msg"
+        exit 1
+    fi
+    echo Backup was successfully sent to remote server.
+fi
 
 for i in $(find "$DESTDIR" -type f -name '*.tar.gz' | sort | head -n -$KEEPCOUNT | xargs) ; do
     if [ -f "$i" ] ; then
-        echo Removing old backup "$i" in destination
+        echo Removing old backup "$i" in local destination
         rm -f "$i" "$i".out
+        if [ -n "$REMOTEHOST" ]; then
+            echo Removing old backup "$i" in remote destination
+            run_sftp_command "rm $REMOTEDIR/$i $REMOTEDIR/$i.out"
+        fi
     fi
 done
 

@@ -48,7 +48,7 @@ JUJUCONTROLLER="$1"
 DESTDIR="$DESTDIR"/"$JUJUCONTROLLER"
 
 # Check access
-timeout 3 $JUJU status --model="$JUJUCONTROLLER":admin/controller > /dev/null 2>&1
+timeout 10 $JUJU status --model="$JUJUCONTROLLER":admin/controller > /dev/null 2>&1
 if ! [ $? -eq 0 ]; then
     msg="Cannot check status of controller model on "$JUJUCONTROLLER", exiting"
     echo $msg
